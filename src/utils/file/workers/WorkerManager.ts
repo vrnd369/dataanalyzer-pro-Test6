@@ -1,4 +1,3 @@
-import { createWorker, createWorkerFromBlob, isWorkerSupported } from '@/utils/core/workerUtils';
 import { FileData } from '@/types/data';
 
 export interface ProcessingOptions {
@@ -36,129 +35,25 @@ export class FileProcessingWorkerManager {
 
   private async initializeWorker(): Promise<void> {
     try {
-      // Try to create worker from module
-      const workerResult = createWorker(
-        new URL('./FileProcessingWorker.ts', import.meta.url),
-        { type: 'module' }
-      );
-
-      if (workerResult.worker) {
-        this.worker = workerResult.worker;
-        this.setupWorkerListeners();
-        return;
-      }
-
+      // Use Vite's native worker import for TypeScript
+      this.worker = new Worker(new URL('./FileProcessingWorker.ts', import.meta.url), { type: 'module' });
+      this.setupWorkerListeners();
+      return;
+      // ... fallback logic can remain if needed ...
       // Fallback to blob-based worker if module worker fails
-      if (isWorkerSupported()) {
-        const workerScript = await this.getWorkerScript();
-        const blobResult = createWorkerFromBlob(workerScript, { type: 'module' });
-        
-        if (blobResult.worker) {
-          this.worker = blobResult.worker;
-          this.setupWorkerListeners();
-          return;
-        }
-      }
-
-      console.warn('Failed to create Web Worker, falling back to main thread processing');
+      // if (isWorkerSupported()) {
+      //   const workerScript = await this.getWorkerScript();
+      //   const blobResult = createWorkerFromBlob(workerScript, { type: 'module' });
+      //   if (blobResult.worker) {
+      //     this.worker = blobResult.worker;
+      //     this.setupWorkerListeners();
+      //     return;
+      //   }
+      // }
+      // console.warn('Failed to create Web Worker, falling back to main thread processing');
     } catch (error) {
       console.error('Error initializing worker:', error);
     }
-  }
-
-  private async getWorkerScript(): Promise<string> {
-    // This would be the worker script content as a string
-    // In a real implementation, you might want to load this from a separate file
-    return `
-      /// <reference lib="webworker" />
-      
-      // Import statements would be handled differently in blob workers
-      // For now, we'll use a simplified version
-      
-      let isProcessing = false;
-      let shouldCancel = false;
-      
-      // Simplified CSV processing for blob worker
-      function processCSV(file, options = {}) {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = (e) => {
-            try {
-              const text = e.target.result;
-              const lines = text.split('\\n');
-              const headers = lines[0].split(',').map(h => h.trim());
-              const data = lines.slice(1).map(line => {
-                const values = line.split(',').map(v => v.trim());
-                const row = {};
-                headers.forEach((header, i) => {
-                  row[header] = values[i] || '';
-                });
-                return row;
-              });
-              
-              self.postMessage({
-                type: 'complete',
-                payload: {
-                  fields: headers.map(header => ({
-                    name: header,
-                    type: 'string',
-                    value: data.map(row => row[header])
-                  })),
-                  totalRows: data.length,
-                  processingTime: 0
-                }
-              });
-              resolve();
-            } catch (error) {
-              reject(error);
-            }
-          };
-          reader.readAsText(file);
-        });
-      }
-      
-      self.onmessage = async (e) => {
-        const { type, payload } = e.data;
-        
-        if (type === 'cancel') {
-          shouldCancel = true;
-          return;
-        }
-        
-        if (type === 'process') {
-          if (isProcessing) {
-            self.postMessage({
-              type: 'error',
-              payload: { message: 'Already processing a file' }
-            });
-            return;
-          }
-          
-          isProcessing = true;
-          shouldCancel = false;
-          
-          try {
-            const { file, fileType, options = {} } = payload;
-            
-            if (fileType === 'csv') {
-              await processCSV(file, options);
-            } else {
-              throw new Error(\`Unsupported file type: \${fileType}\`);
-            }
-          } catch (error) {
-            self.postMessage({
-              type: 'error',
-              payload: {
-                message: error.message || 'Unknown error occurred',
-                code: 'PROCESSING_ERROR'
-              }
-            });
-          } finally {
-            isProcessing = false;
-          }
-        }
-      };
-    `;
   }
 
   private setupWorkerListeners(): void {
